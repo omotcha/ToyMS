@@ -1,9 +1,10 @@
+import { HardhatUserConfig } from "hardhat/types";
 require("@nomiclabs/hardhat-waffle");
 
 const {signers_addr} = require('./secrets/accounts')
 const {signers_privkey} = require('./secrets/accounts')
 
-module.exports = {
+const config: HardhatUserConfig = {
   solidity: "0.8.9",
   networks: {
     ganache: {
@@ -12,6 +13,8 @@ module.exports = {
     }
   },
   paths: {
-    artifacts: "./src/artifacts",
+    artifacts: "src/artifacts"
   }
 }
+
+export default config;

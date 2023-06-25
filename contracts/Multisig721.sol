@@ -17,9 +17,9 @@ contract Multisig721 is IERC721Receiver, Ownable{
         // 2: transaction confirmed but yet executed
         // 3: transaction executed and succeeded
         // 4: transaction executed but failed
-        uint8 state;                 // transaction state
-        uint256 txid;                  // transaction id
-        uint256 value;                 // token id in erc-721 transaction context
+        uint8 state;                // transaction state
+        uint256 txid;               // transaction id
+        uint256 value;              // token id in erc-721 transaction context
         address requester;          // transaction requester
         address to;                 // tranfer-to address
         address tokenContract;      // token contract address
@@ -30,6 +30,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     uint256 private _signerCount;
     uint256 private _txCount;
     uint256 private _maxSignerNum;
+    address[] private _histSigners;
     mapping(address=>bool) private _isSigner;
     mapping(uint256=>Transaction) private _transactions;
     mapping(uint256=>mapping(address=>bool)) private _confirmations;
@@ -83,6 +84,8 @@ contract Multisig721 is IERC721Receiver, Ownable{
     function addSigner(address target) external onlyOwner{
         require(_signerCount < _maxSignerNum, "signer num cannot exceed the limit, please remove one or more signers first");
         require(_isSigner[target] == false, "only non-signer can be added");
+        // add target to history signer
+        _histSigners.push(target);
         _setSigner(target, true);
         _signerCount += 1;
         emit SignerAddition(target);
@@ -174,6 +177,29 @@ contract Multisig721 is IERC721Receiver, Ownable{
         // finally, add _txCount
         _txCount += 1;
     }
+
+    ////////////////////////
+    //   public for dev   //
+    ////////////////////////
+    function devGetThreshold() public view onlyOwner returns (uint256) {
+        return _threshold;
+    }
+
+    function devGetSignerCount() public view onlyOwner returns(uint256) {
+        return _signerCount;
+    }
+
+    function devGetSigners() public view onlyOwner returns(address[] memory signers){
+        signers = new address[](_signerCount);
+        uint256 count = 0;
+        for (uint256 i=0;i<_histSigners.length;i++){
+            if (_isSigner[_histSigners[i]]){
+                signers[count] = _histSigners[i];
+                count += 1;
+            }
+        }
+    }
+
 
     ////////////////////////
     //   internal utils   //
