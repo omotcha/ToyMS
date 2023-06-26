@@ -13,16 +13,16 @@ contract Multisig721 is IERC721Receiver, Ownable{
     struct Transaction {
         // transaction state
         // 0: not found, or newly created, or invalid
-        // 1: transaction requested but yet confirmed
-        // 2: transaction confirmed but yet executed
-        // 3: transaction executed and succeeded
-        // 4: transaction executed but failed
+        // 1: transaction requested but yet executed
+        // 2: transaction executed and succeeded
+        // 3: transaction executed but failed
         uint8 state;                // transaction state
         uint256 txid;               // transaction id
         uint256 value;              // token id in erc-721 transaction context
         address requester;          // transaction requester
         address to;                 // tranfer-to address
         address tokenContract;      // token contract address
+        uint256 expireTime;         // transcation expire time
     }
 
     // storages
@@ -45,10 +45,13 @@ contract Multisig721 is IERC721Receiver, Ownable{
     event NewTransactionRecorded(address indexed requester, uint256 txid, uint256 state);
     event DevIgnoredV(uint256 pos);
     
-    
 
-    // constructor
-    constructor(uint256 threshold, uint256 maxSignerNum){
+    /**
+     * constructor
+     * @param threshold the minimal number of valid signatures required for a multisig transaction
+     * @param maxSignerNum the maximum number of contract holded signers
+     */
+    constructor(uint256 threshold, uint256 maxSignerNum) {
         require(threshold > 0, "theshold should be greater than 0");
         require(maxSignerNum > 0, "maximum signer num should be greater than 0");
         
@@ -76,8 +79,19 @@ contract Multisig721 is IERC721Receiver, Ownable{
         _;
     }
 
+    modifier signableTransaction(uint256 txid) {
+        require(_transactions[txid].state == 1, "transaction not signable");
+        _;
+    }
 
-    // implementations
+    modifier executetableTransaction(uint256 txid) {
+        require(_transactions[txid].state == 1, "transaction not executable");
+        require(_canExecute(txid), "not enough signatures");
+        _;
+    }
+
+
+    // erc721 implementation
     function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
         return this.onERC721Received.selector;
     }
@@ -86,7 +100,12 @@ contract Multisig721 is IERC721Receiver, Ownable{
     ////////////////////////////
     //   external functions   //
     ////////////////////////////
-    function addSigner(address target) external onlyOwner{
+
+    /**
+     * add a new signer
+     * @param target signer address
+     */
+    function addSigner(address target) external onlyOwner {
         require(_signerCount < _maxSignerNum, "signer num cannot exceed the limit, please remove one or more signers first");
         require(_isSigner[target] == false, "only non-signer can be added");
         // add target to history signer
@@ -96,7 +115,11 @@ contract Multisig721 is IERC721Receiver, Ownable{
         emit SignerAddition(target);
     }
 
-    function removeSigner(address target) external onlyOwner{
+    /**
+     * remove a signer
+     * @param target signer address
+     */
+    function removeSigner(address target) external onlyOwner {
         require(_signerCount > 0, "signer num should be greater than 0, please add one or more signers first");
         require(_signerCount > _threshold, "threshold should be greater than current signer num");
         require(_isSigner[target] == true, "only signer can be removed");
@@ -105,21 +128,130 @@ contract Multisig721 is IERC721Receiver, Ownable{
         emit SignerRemoval(target);
     }
 
-    function changeThreshold(uint256 new_threshold) external onlyOwner{
+    /**
+     * change the threshold
+     * @param new_threshold the new threshold
+     */
+    function changeThreshold(uint256 new_threshold) external onlyOwner {
         require(_signerCount >= new_threshold, "new threshold should be no greater than current signer num");
         _threshold = new_threshold;
         emit ThresholdChanged(new_threshold);
     }
 
+    /**
+     * initiate a multisig erc-721 token transfer transaction request
+     * @param to recipient address
+     * @param value token id
+     * @param tokenContract token contract address
+     * @param expireTime multisig transaction expire time(timestamp)
+     * @return transactionID the initiated transaction id
+     */
+    function requestTransaction(
+        address to,
+        uint256 value,
+        address tokenContract,
+        uint256 expireTime
+    ) public returns (uint256 transactionID) {
+        require(expireTime > block.timestamp, "transaction expired");
+        require(tokenContract != address(0));
+        transactionID = _txCount;
+        _transactions[transactionID] = Transaction({
+            state: 1,
+            txid: transactionID,
+            value: value,
+            requester: msg.sender,
+            to: to,
+            tokenContract: tokenContract,
+            expireTime: expireTime
+        });
+        _txCount += 1;
+        // new transaction recorded
+        emit NewTransactionRecorded(_transactions[_txCount].requester, _transactions[_txCount].txid, _transactions[_txCount].state);
+    }
+
+    /**
+     * sign a transaction, only support single-user signing
+     * allow multi-signing of the same signer
+     * @param transactionID transaction id
+     * @param confirm confirm or revoke
+     * @param signature signature
+     */
+    function signTransaction(
+        uint256 transactionID,
+        bool confirm,
+        bytes memory signature
+    ) public signerOnly signableTransaction(transactionID) {
+        require(_transactions[transactionID].expireTime > block.timestamp, "transaction expired");
+
+        // this is probably not gonna happen
+        require(_transactions[transactionID].tokenContract != address(0), "empty token contract");
+        require(signature.length==65, "not a valid signature length");
+
+        address iOwner;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        // verification
+        bytes32 dataHash = keccak256(abi.encodePacked("SIGN", address(this), transactionID, confirm));
+        (v,r,s) = _getvrs(signature, 0);
+        if (v == 0) {
+            // leave this case as "invalid signature"
+            emit DevIgnoredV(0);
+            // do nothing and return
+            return;
+        } else if (v == 1) {
+            // leave this case as "invalid signature"
+            emit DevIgnoredV(0);
+            // do nothing and return
+            return;
+        } else if (v > 30) {
+            iOwner = ecrecover(keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", dataHash)), v - 4, r, s);
+        } else {
+            iOwner = ecrecover(dataHash, v, r, s);
+        }
+        // check whether the signer matches the signature
+        if (_isSigner[iOwner] && iOwner == msg.sender){
+            _confirmations[transactionID][iOwner] = confirm;
+        } else {
+            revert("Revert : an invalid user detected");
+        }
+    }
+
+    /**
+     * execute a transaction
+     * @param transactionID the transaction id
+     */
+    function executeTransaction(
+        uint256 transactionID
+    ) public executetableTransaction(transactionID) {
+        require(_transactions[transactionID].requester == msg.sender, "the transaction executor should be the same with the requester");
+        require(_transactions[transactionID].expireTime > block.timestamp, "transaction expired");
+
+        // this is probably not gonna happen
+        require(_transactions[transactionID].tokenContract != address(0), "empty token contract");
+
+        _transactions[transactionID].state = 2;
+        // call token transfer
+        IERC721(_transactions[transactionID].tokenContract).safeTransferFrom(address(this), _transactions[transactionID].to, _transactions[transactionID].value);
+    }
+
+    /**
+     * an erc-721 token transfer based on multisig
+     * @param to recipient address
+     * @param value token id
+     * @param tokenContract token contract address
+     * @param expireTime multisig transaction expire time(timestamp)
+     * @param signatures stack of signatures
+     */
     function multisigTransfer(
         address to,
         uint256 value,
         address tokenContract,
         uint256 expireTime,
         bytes memory signatures
-    ) public signerOnly{
+    ) public signerOnly {
         require(expireTime > block.timestamp, "transaction expired");
-        require(tokenContract != address(0));
+        require(tokenContract != address(0), "empty token contract");
         require(signatures.length >= _threshold*65, "not enough signatures");
         address iOwner;
         uint8 v;
@@ -137,7 +269,8 @@ contract Multisig721 is IERC721Receiver, Ownable{
             value: value,
             requester: msg.sender,
             to: to,
-            tokenContract: tokenContract
+            tokenContract: tokenContract,
+            expireTime: expireTime
         });
 
         uint256 i;
@@ -174,7 +307,6 @@ contract Multisig721 is IERC721Receiver, Ownable{
             _transactions[_txCount].state = 2;
             // call token transfer
             IERC721(tokenContract).safeTransferFrom(address(this), to, value);
-            _transactions[_txCount].state = 3;
         }
 
         // new transaction recorded
@@ -182,51 +314,17 @@ contract Multisig721 is IERC721Receiver, Ownable{
 
         // finally, add _txCount
         _txCount += 1;
-        // return _transactions[_txCount-1].state;
     }
 
-    ////////////////////////
-    //   public for dev   //
-    ////////////////////////
-    function devGetThreshold() public view onlyOwner returns (uint256) {
+    function getThreshold() public view onlyOwner returns (uint256) {
         return _threshold;
     }
 
-    function devGetSignerCount() public view onlyOwner returns(uint256) {
+    function getSignerCount() public view onlyOwner returns(uint256) {
         return _signerCount;
     }
 
-    function devGetSigners() public view onlyOwner returns(address[] memory signers){
-        signers = new address[](_signerCount);
-        uint256 count = 0;
-        for (uint256 i=0;i<_histSigners.length;i++){
-            if (_isSigner[_histSigners[i]]){
-                signers[count] = _histSigners[i];
-                count += 1;
-            }
-        }
-    }
 
-    function devRecoverSingleSigner(
-        address to,
-        uint256 value,
-        address tokenContract,
-        uint256 expireTime,
-        bytes memory signatures,
-        uint256 pos
-    ) public view onlyOwner returns(address){   
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-        bytes32 dataHash = keccak256(abi.encodePacked("ERC721", address(this), to, value, tokenContract, expireTime));
-        (v,r,s) = _getvrs(signatures, pos);
-        address signer = ecrecover(dataHash, v, r, s);
-        return signer;
-    }
-
-    function devCheckTxState(uint256 txid) public view onlyOwner hasTransaction(txid) returns(uint8){
-        return _transactions[txid].state;
-    }
 
     ////////////////////////
     //   internal utils   //
@@ -255,6 +353,29 @@ contract Multisig721 is IERC721Receiver, Ownable{
             r := mload(add(signatures, add(pos, 0x20)))
             s := mload(add(signatures, add(pos, 0x40)))
             v := and(mload(add(signatures, add(pos, 0x41))), 0xff)
+        }
+    }
+
+    /**
+     * check if a transaction can execute
+     * this function works with a modifier
+     * @param txid transaction id
+     */
+    function _canExecute(uint256 txid) internal view returns(bool){
+        uint256 count = 0;
+        uint256 i;
+        for (i=0;i<_histSigners.length;i++){
+            if (_isSigner[_histSigners[i]]){
+                if(_confirmations[txid][_histSigners[i]]){
+                    count += 1;
+                }
+            }
+        }
+        if(count < _threshold){
+            return false;
+        }
+        else{
+            return true;
         }
     }
     
