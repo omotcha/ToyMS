@@ -1,7 +1,7 @@
 import { HardhatUserConfig } from "hardhat/types";
 require("@nomiclabs/hardhat-waffle");
 
-const {signers_addr} = require('./secrets/accounts')
+// const {signers_addr} = require('./secrets/accounts')
 const {signers_privkey} = require('./secrets/accounts')
 
 const config: HardhatUserConfig = {

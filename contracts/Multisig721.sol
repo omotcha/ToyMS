@@ -200,6 +200,36 @@ contract Multisig721 is IERC721Receiver, Ownable{
         }
     }
 
+    function devRecoverSingleSigner(
+        address to,
+        uint256 value,
+        address tokenContract,
+        uint256 expireTime,
+        bytes memory signatures
+    ) public view onlyOwner returns(address){
+
+        
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes32 dataHash = keccak256(abi.encodePacked("ERC721", address(this), to, value, tokenContract, expireTime));
+        (v,r,s) = _getvrs(signatures, 0);
+        address signer = ecrecover(dataHash, v, r, s);
+        return signer;
+    }
+
+    function devSimpleRecoverSingleSigner(
+        address to,
+        bytes memory signatures
+    ) public view onlyOwner returns(address){
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes32 dataHash = keccak256(abi.encodePacked(to));
+        (v,r,s) = _getvrs(signatures, 0);
+        address signer = ecrecover(dataHash, v, r, s);
+        return signer;
+    }
 
     ////////////////////////
     //   internal utils   //
