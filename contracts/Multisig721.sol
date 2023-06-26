@@ -12,7 +12,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     // multisig transaction data structure
     struct Transaction {
         // transaction state
-        // 0: newly created or invalid
+        // 0: not found, or newly created, or invalid
         // 1: transaction requested but yet confirmed
         // 2: transaction confirmed but yet executed
         // 3: transaction executed and succeeded
@@ -71,6 +71,11 @@ contract Multisig721 is IERC721Receiver, Ownable{
         _;
     }
 
+    modifier hasTransaction(uint256 txid) {
+        require(_transactions[txid].state > 0, "transaction not found");
+        _;
+    }
+
 
     // implementations
     function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
@@ -93,6 +98,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
 
     function removeSigner(address target) external onlyOwner{
         require(_signerCount > 0, "signer num should be greater than 0, please add one or more signers first");
+        require(_signerCount > _threshold, "threshold should be greater than current signer num");
         require(_isSigner[target] == true, "only signer can be removed");
         _setSigner(target, false);
         _signerCount -= 1;
@@ -100,7 +106,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     }
 
     function changeThreshold(uint256 new_threshold) external onlyOwner{
-        require(_signerCount <= new_threshold, "new threshold should be greater than current signer num");
+        require(_signerCount >= new_threshold, "new threshold should be no greater than current signer num");
         _threshold = new_threshold;
         emit ThresholdChanged(new_threshold);
     }
@@ -111,7 +117,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
         address tokenContract,
         uint256 expireTime,
         bytes memory signatures
-    ) public signerOnly {
+    ) public signerOnly{
         require(expireTime > block.timestamp, "transaction expired");
         require(tokenContract != address(0));
         require(signatures.length >= _threshold*65, "not enough signatures");
@@ -120,10 +126,9 @@ contract Multisig721 is IERC721Receiver, Ownable{
         bytes32 r;
         bytes32 s;
         // verification
-        bytes32 dataHash = keccak256(abi.encode("ERC721", address(this), to, value, tokenContract, expireTime));
+        bytes32 dataHash = keccak256(abi.encodePacked("ERC721", address(this), to, value, tokenContract, expireTime));
 
         uint256 validated_count = 0;
-        uint256 total_count = 0;
 
         // initiate a new transaction record with state set to 0
         _transactions[_txCount] = Transaction({
@@ -135,18 +140,17 @@ contract Multisig721 is IERC721Receiver, Ownable{
             tokenContract: tokenContract
         });
 
-        // parse signatures to confirmations
-        while(validated_count<_threshold && total_count*65<signatures.length){
-            (v,r,s) = _getvrs(signatures, total_count);
+        uint256 i;
+
+        for (i=0;i<_threshold;i++){
+            (v,r,s) = _getvrs(signatures, i);
             if (v == 0) {
                 // leave this case as "invalid signature"
-                emit DevIgnoredV(total_count);
-                total_count += 1;
+                emit DevIgnoredV(i);
                 continue;
             } else if (v == 1) {
                 // leave this case as "invalid signature"
-                emit DevIgnoredV(total_count);
-                total_count += 1;
+                emit DevIgnoredV(i);
                 continue;
             } else if (v > 30) {
                 iOwner = ecrecover(keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", dataHash)), v - 4, r, s);
@@ -157,7 +161,6 @@ contract Multisig721 is IERC721Receiver, Ownable{
             if (_isSigner[iOwner] && !_confirmations[_txCount][iOwner]){
                 _confirmations[_txCount][iOwner] = true;
                 validated_count += 1;
-                total_count += 1;
             } else {
                 revert("Revert : an invalid user or multi-sign by same user detected");
             }
@@ -174,8 +177,12 @@ contract Multisig721 is IERC721Receiver, Ownable{
             _transactions[_txCount].state = 3;
         }
 
+        // new transaction recorded
+        emit NewTransactionRecorded(_transactions[_txCount].requester, _transactions[_txCount].txid, _transactions[_txCount].state);
+
         // finally, add _txCount
         _txCount += 1;
+        // return _transactions[_txCount-1].state;
     }
 
     ////////////////////////
@@ -205,30 +212,20 @@ contract Multisig721 is IERC721Receiver, Ownable{
         uint256 value,
         address tokenContract,
         uint256 expireTime,
-        bytes memory signatures
-    ) public view onlyOwner returns(address){
-
-        
+        bytes memory signatures,
+        uint256 pos
+    ) public view onlyOwner returns(address){   
         uint8 v;
         bytes32 r;
         bytes32 s;
         bytes32 dataHash = keccak256(abi.encodePacked("ERC721", address(this), to, value, tokenContract, expireTime));
-        (v,r,s) = _getvrs(signatures, 0);
+        (v,r,s) = _getvrs(signatures, pos);
         address signer = ecrecover(dataHash, v, r, s);
         return signer;
     }
 
-    function devSimpleRecoverSingleSigner(
-        address to,
-        bytes memory signatures
-    ) public view onlyOwner returns(address){
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-        bytes32 dataHash = keccak256(abi.encodePacked(to));
-        (v,r,s) = _getvrs(signatures, 0);
-        address signer = ecrecover(dataHash, v, r, s);
-        return signer;
+    function devCheckTxState(uint256 txid) public view onlyOwner hasTransaction(txid) returns(uint8){
+        return _transactions[txid].state;
     }
 
     ////////////////////////
