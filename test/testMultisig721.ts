@@ -5,7 +5,12 @@ import { BigNumber, Contract } from "ethers";
 // import hre from "hardhat"
 import { ethers } from "hardhat";
 
-const {signers_addr, signers_privkey} = require('../secrets/accounts')
+const {signers_addr, signers_privkey} = require('../secrets/accounts');
+
+import chai from "chai";
+import { solidity } from "ethereum-waffle";
+
+chai.use(solidity);
 
 // ethereumJS support
 const abi = require('ethereumjs-abi');

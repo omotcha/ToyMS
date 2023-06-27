@@ -8,14 +8,16 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract Multisig721 is IERC721Receiver, Ownable{
 
+    // version
+    string public constant VERSION = "0.0.1";
 
     // multisig transaction data structure
     struct Transaction {
         // transaction state
-        // 0: not found, or newly created, or invalid
-        // 1: transaction requested but yet executed
+        // 0: not found | newly created | invalid => not recorded
+        // 1: transaction requested => recorded, but yet executed
         // 2: transaction executed and succeeded
-        // 3: transaction executed but failed
+        // 3: transaction executed but failed (not used for now)
         uint8 state;                // transaction state
         uint256 txid;               // transaction id
         uint256 value;              // token id in erc-721 transaction context
@@ -54,6 +56,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     constructor(uint256 threshold, uint256 maxSignerNum) {
         require(threshold > 0, "theshold should be greater than 0");
         require(maxSignerNum > 0, "maximum signer num should be greater than 0");
+        require(maxSignerNum >= threshold, "threshold should be no greater than maximum signer num");
         
         _threshold = threshold;
         _maxSignerNum = maxSignerNum;
@@ -91,7 +94,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     }
 
 
-    // erc721 implementation
+    // erc721 receiver implementation
     function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
         return this.onERC721Received.selector;
     }
@@ -106,7 +109,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
      * @param target signer address
      */
     function addSigner(address target) external onlyOwner {
-        require(_signerCount < _maxSignerNum, "signer num cannot exceed the limit, please remove one or more signers first");
+        require(_signerCount < _maxSignerNum, "signer num cannot exceed the limit, please remove several signers first");
         require(_isSigner[target] == false, "only non-signer can be added");
         // add target to history signer
         _histSigners.push(target);
@@ -120,7 +123,6 @@ contract Multisig721 is IERC721Receiver, Ownable{
      * @param target signer address
      */
     function removeSigner(address target) external onlyOwner {
-        require(_signerCount > 0, "signer num should be greater than 0, please add one or more signers first");
         require(_signerCount > _threshold, "threshold should be greater than current signer num");
         require(_isSigner[target] == true, "only signer can be removed");
         _setSigner(target, false);
@@ -140,6 +142,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
 
     /**
      * initiate a multisig erc-721 token transfer transaction request
+     * a lazy multisig transaction workflow: request -> sign -> execute
      * @param to recipient address
      * @param value token id
      * @param tokenContract token contract address
@@ -170,10 +173,10 @@ contract Multisig721 is IERC721Receiver, Ownable{
     }
 
     /**
-     * sign a transaction, only support single-user signing
-     * allow multi-signing of the same signer
+     * sign a transaction, only support single signature input, allowing multi-signing of the same signer
+     * a lazy multisig transaction workflow: request -> sign -> execute
      * @param transactionID transaction id
-     * @param confirm confirm or revoke
+     * @param confirm true for "confirm", false for "revoke"
      * @param signature signature
      */
     function signTransaction(
@@ -357,7 +360,7 @@ contract Multisig721 is IERC721Receiver, Ownable{
     }
 
     /**
-     * check if a transaction can execute
+     * check if a transaction can execute (gaining enough signatures)
      * this function works with a modifier
      * @param txid transaction id
      */
